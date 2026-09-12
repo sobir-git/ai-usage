@@ -59,6 +59,21 @@ Reads `~/.claude/.credentials.json` and calls Claude Code's live OAuth usage
 service. It shows rolling five-hour and seven-day windows, model-specific
 windows when present, and extra-usage state.
 
+## Provider routes
+
+The adapters currently use these client routes:
+
+- Devin: `POST {api_server_url}/exa.seat_management_pb.SeatManagementService/GetUserStatus`
+- Codex: `GET {base_url}/wham/usage` for the normal ChatGPT backend; custom
+  bases use `{base_url}/api/codex/usage`
+- Codex fallback: local `codex app-server`, request
+  `account/rateLimits/read`
+- Claude Code: `GET https://api.anthropic.com/api/oauth/usage`
+
+These are implementation details of the upstream clients, not guaranteed public
+APIs. The exact configured Devin and Codex bases are read locally and are never
+hard-coded into credentials or sent anywhere else.
+
 ## Credential handling
 
 The app reads existing local credentials but does not refresh, modify, or
