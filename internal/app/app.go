@@ -94,11 +94,16 @@ func Collect(ctx context.Context, selected []ProviderSpec, timeout time.Duration
 			results[index].Rendered = rendered
 			results[index].Status = "ok"
 			if aggregate, ok := usage.(*model.CodexAggregate); ok {
+				successes := 0
 				for _, account := range aggregate.Accounts {
-					if account.Status != "ok" {
-						results[index].Status = "partial"
-						break
+					if account.Status == "ok" {
+						successes++
 					}
+				}
+				if successes == 0 {
+					results[index].Status = "error"
+				} else if successes < len(aggregate.Accounts) {
+					results[index].Status = "partial"
 				}
 			}
 		}(index, spec)
@@ -125,7 +130,7 @@ func FormatHuman(results []ProviderResult, showMissing bool) string {
 	for _, result := range visible {
 		lines = append(lines, "", result.Name)
 		switch {
-		case (result.Status == "ok" || result.Status == "partial") && result.Rendered != "":
+		case result.Rendered != "":
 			for _, line := range strings.Split(result.Rendered, "\n") {
 				lines = append(lines, "  "+line)
 			}

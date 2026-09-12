@@ -1,13 +1,87 @@
 package providers
 
 import (
+	"bufio"
+	"context"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestFallbackDoesNotPromoteSparkToOverall(t *testing.T) {
+	window := func(used int) map[string]any {
+		return map[string]any{"primary": map[string]any{"usedPercent": used, "windowDurationMins": 300}}
+	}
+	for i := 0; i < 20; i++ {
+		payload := appServerPayload(map[string]any{"rateLimitsByLimitId": map[string]any{"codex": window(80), "codex_spark": window(0)}})
+		usage, err := normalizeCodexUsage(payload, "app-server")
+		if err != nil || len(usage.Windows) != 2 || usage.Windows[0].UsedPercent != 80 {
+			t.Fatalf("wrong main quota: %+v, %v", usage, err)
+		}
+	}
+	if _, err := normalizeCodexUsage(appServerPayload(map[string]any{}), "app-server"); err == nil {
+		t.Fatal("empty fallback fabricated credits")
+	}
+}
+
+func TestCustomDevinCredentialsDetected(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "credentials.toml")
+	if err := os.WriteFile(path, []byte("windsurf_api_key = 'test' # comment\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DEVIN_CREDENTIALS_FILE", path)
+	t.Setenv("DEVIN_API_KEY", "")
+	if !DevinConfigured() {
+		t.Fatal("custom credentials ignored")
+	}
+	credentials, err := loadDevinCredentials()
+	if err != nil || credentials.APIKey != "test" {
+		t.Fatalf("credentials parsing failed: %v", err)
+	}
+}
+
+func TestTOMLRootAndInlineComment(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("chatgpt_base_url = \"https://example.test\" # hello\n[other]\nother_key = 'wrong'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readTOMLString(path, "chatgpt_base_url")
+	if err != nil || got != "https://example.test" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	got, err = readTOMLString(path, "other_key")
+	if err != nil || got != "" {
+		t.Fatal("read nested key as root setting")
+	}
+}
+
+func TestRateLimitDoesNotRapidlyRetry(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.WriteHeader(429) }))
+	defer server.Close()
+	_, err := requestJSON(context.Background(), "GET", server.URL, "test", nil, nil, time.Second, 2)
+	if err == nil || calls != 1 || !strings.Contains(err.Error(), "rate limited") {
+		t.Fatalf("calls %d, error %v", calls, err)
+	}
+}
+
+func TestRPCResponseSizeBound(t *testing.T) {
+	_, err := readRPCResponse(context.Background(), bufio.NewReader(strings.NewReader(strings.Repeat("x", MaxResponseBytes+1))), 1)
+	if err == nil || !strings.Contains(err.Error(), "oversized") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestTimestampBeyondNanosecondRange(t *testing.T) {
+	got, ok := timestamp(16725225600.0) // 2500-01-01
+	if !ok || got.Year() != 2500 {
+		t.Fatalf("timestamp overflow: %v", got)
+	}
+}
 
 func TestDiscoverCodexHomesIsShallowAndSkipsSymlinks(t *testing.T) {
 	root := t.TempDir()

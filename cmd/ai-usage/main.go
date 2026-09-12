@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"os/signal"
 	"syscall"
@@ -53,14 +55,21 @@ func run(arguments []string) int {
 	retries := flagSet.Int("retries", 2, "transient-failure retries")
 	showVersion := flagSet.Bool("version", false, "print the version")
 	if err := flagSet.Parse(arguments); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	if flagSet.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "ai-usage: unexpected argument:", flagSet.Arg(0))
 		return 2
 	}
 	if *showVersion {
 		fmt.Printf("ai-usage %s\n", version)
 		return 0
 	}
-	if *timeoutSeconds <= 0 {
-		fmt.Fprintln(os.Stderr, "ai-usage: --timeout must be positive")
+	if math.IsNaN(*timeoutSeconds) || math.IsInf(*timeoutSeconds, 0) || *timeoutSeconds < 0.001 || *timeoutSeconds > 3600 {
+		fmt.Fprintln(os.Stderr, "ai-usage: --timeout must be between 0.001 and 3600 seconds")
 		return 2
 	}
 	if *retries < 0 {

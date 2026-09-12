@@ -23,6 +23,9 @@ type DevinCredentials struct {
 }
 
 func DevinCredentialsPath() string {
+	if path := envText("DEVIN_CREDENTIALS_FILE"); path != "" {
+		return path
+	}
 	if dataHome := envText("XDG_DATA_HOME"); dataHome != "" {
 		return filepath.Join(dataHome, "devin", "credentials.toml")
 	}

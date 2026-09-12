@@ -166,8 +166,10 @@ func formatClaude(usage *model.ClaudeUsage) string {
 	if usage.ExtraUsage != nil {
 		if usage.ExtraUsage.Enabled != nil && *usage.ExtraUsage.Enabled {
 			lines = append(lines, "Extra usage: enabled")
-		} else {
+		} else if usage.ExtraUsage.Enabled != nil {
 			lines = append(lines, "Extra usage: disabled")
+		} else {
+			lines = append(lines, "Extra usage: unknown")
 		}
 	}
 	return strings.Join(lines, "\n")

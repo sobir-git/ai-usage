@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	ToolVersion      = "0.1.0"
+	ToolVersion      = "0.2.0"
 	MaxResponseBytes = 1 << 20
 )
 
@@ -166,11 +166,11 @@ func timestamp(value any) (*time.Time, bool) {
 		if seconds > 100_000_000_000 {
 			seconds /= 1000
 		}
-		if seconds < 0 || seconds > float64(math.MaxInt64) {
+		if seconds > 253402300799 {
 			return nil, false
 		}
-		nanos := int64(math.Round(seconds * float64(time.Second)))
-		value := time.Unix(0, nanos).UTC()
+		whole, fraction := math.Modf(seconds)
+		value := time.Unix(int64(whole), int64(fraction*float64(time.Second))).UTC()
 		return &value, true
 	}
 	return nil, false
@@ -356,6 +356,11 @@ func requestJSON(ctx context.Context, method, endpoint, label string, headers ma
 		if len(responseBody) > MaxResponseBytes {
 			return nil, usageError("%s returned an oversized response", label)
 		}
+		// Repeated immediate retries make a quota-service rate limit worse.
+		// Let the user retry explicitly after the provider's cooldown.
+		if response.StatusCode == http.StatusTooManyRequests {
+			return nil, usageError("%s is rate limited (HTTP 429); try again later", label)
+		}
 		if retryableStatuses[response.StatusCode] && attempt < retries {
 			if err := waitRetry(ctx, attempt); err != nil {
 				return nil, err
@@ -458,20 +463,30 @@ func readTOMLString(path, key string) (string, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+		if strings.HasPrefix(line, "[") {
+			// These settings belong to the root table, never a model/provider table.
+			break
+		}
 		index := strings.IndexByte(line, '=')
 		if index < 0 || strings.TrimSpace(line[:index]) != key {
 			continue
 		}
 		value := strings.TrimSpace(line[index+1:])
-		if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
-			parsed, err := strconv.Unquote(value)
+		if len(value) >= 2 && value[0] == '"' {
+			quoted, err := strconv.QuotedPrefix(value)
+			if err != nil {
+				return "", err
+			}
+			parsed, err := strconv.Unquote(quoted)
 			if err != nil {
 				return "", err
 			}
 			return strings.TrimSpace(parsed), nil
 		}
-		if len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\'' {
-			return strings.TrimSpace(value[1 : len(value)-1]), nil
+		if len(value) >= 2 && value[0] == '\'' {
+			if end := strings.IndexByte(value[1:], '\''); end >= 0 {
+				return strings.TrimSpace(value[1 : end+1]), nil
+			}
 		}
 	}
 	if err := scanner.Err(); err != nil {

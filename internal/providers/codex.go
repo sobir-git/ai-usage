@@ -165,19 +165,8 @@ func FetchCodex(ctx context.Context, timeout time.Duration, retries int) (*model
 		return accounts[i].Profile < accounts[j].Profile
 	})
 	rendered := make([]string, 0, len(accounts))
-	successes := 0
 	for _, account := range accounts {
 		rendered = append(rendered, renders[account.Profile])
-		if account.Status == "ok" {
-			successes++
-		}
-	}
-	if successes == 0 {
-		var errorsText []string
-		for _, account := range accounts {
-			errorsText = append(errorsText, account.Profile+": "+account.Error)
-		}
-		return nil, "", usageError("all Codex profiles failed: %s", strings.Join(errorsText, "; "))
 	}
 	return &model.CodexAggregate{Accounts: accounts}, strings.Join(rendered, "\n\n"), nil
 }
@@ -274,8 +263,6 @@ func appendCodexWindows(windows *[]model.Window, scope string, rateLimit map[str
 		}
 		if scope != "Overall" {
 			name = scope + " (" + name + ")"
-		} else if slot == "secondary_window" && durationName(seconds) != "" {
-			name += " secondary"
 		}
 		*windows = append(*windows, model.Window{
 			Name:             name,
@@ -328,8 +315,10 @@ func formatCodex(usage *model.CodexUsage) string {
 				suffix = fmt.Sprintf(" (%v)", usage.Credits.Balance)
 			}
 			lines = append(lines, "Credits: available"+suffix)
-		} else {
+		} else if usage.Credits.HasCredits != nil {
 			lines = append(lines, "Credits: none")
+		} else {
+			lines = append(lines, "Credits: unknown")
 		}
 	}
 	return strings.Join(lines, "\n")
@@ -382,11 +371,15 @@ func fetchAppServerUsage(parent context.Context, codexHome string, timeout time.
 	}); err != nil {
 		return "", nil, usageError("Codex app-server initialization failed")
 	}
-	if _, err := readRPCResponse(ctx, reader, 1); err != nil {
+	initialization, err := readRPCResponse(ctx, reader, 1)
+	if err != nil {
 		if ctx.Err() != nil {
 			return "", nil, usageError("Codex app-server timed out")
 		}
 		return "", nil, err
+	}
+	if initialization["error"] != nil {
+		return "", nil, usageError("Codex app-server rejected initialization")
 	}
 	if err := writeRPC(stdin, map[string]any{"method": "initialized", "params": map[string]any{}}); err != nil {
 		return "", nil, usageError("Codex app-server initialization failed")
@@ -429,7 +422,20 @@ func readRPCResponse(parent context.Context, reader *bufio.Reader, responseID in
 	readDone := make(chan result, 1)
 	go func() {
 		for {
-			line, err := reader.ReadBytes('\n')
+			var line []byte
+			var err error
+			for {
+				var part []byte
+				part, err = reader.ReadSlice('\n')
+				line = append(line, part...)
+				if len(line) > MaxResponseBytes {
+					readDone <- result{err: usageError("Codex app-server returned an oversized response")}
+					return
+				}
+				if err != bufio.ErrBufferFull {
+					break
+				}
+			}
 			if err != nil {
 				readDone <- result{err: usageError("Codex app-server closed before returning rate limits")}
 				return
@@ -457,20 +463,26 @@ func readRPCResponse(parent context.Context, reader *bufio.Reader, responseID in
 func appServerPayload(result map[string]any) map[string]any {
 	rateLimits := mapping(result["rateLimits"])
 	byLimitID := mapping(result["rateLimitsByLimitId"])
-	if len(rateLimits) == 0 && len(byLimitID) > 0 {
-		for _, value := range byLimitID {
-			rateLimits = mapping(value)
-			break
-		}
+	// Only the codex bucket represents the account's overall quota. Selecting
+	// an arbitrary map entry can present Spark's unused quota as the main limit.
+	mainLimitID := text(rateLimits["limitId"])
+	if len(rateLimits) == 0 {
+		rateLimits = mapping(byLimitID["codex"])
+		mainLimitID = "codex"
 	}
 	payload := map[string]any{
 		"plan_type":  text(rateLimits["planType"]),
 		"rate_limit": appServerRateLimit(rateLimits),
 		"credits":    appServerCredits(mapping(rateLimits["credits"])),
 	}
-	mainLimitID := text(rateLimits["limitId"])
 	additional := make([]any, 0)
-	for limitID, value := range byLimitID {
+	ids := make([]string, 0, len(byLimitID))
+	for id := range byLimitID {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, limitID := range ids {
+		value := byLimitID[limitID]
 		if limitID == mainLimitID {
 			continue
 		}
@@ -513,6 +525,9 @@ func appServerWindow(value any) map[string]any {
 }
 
 func appServerCredits(value map[string]any) map[string]any {
+	if len(value) == 0 {
+		return nil
+	}
 	return map[string]any{
 		"balance":     numberOrText(value["balance"]),
 		"has_credits": boolOrNil(value["hasCredits"]),

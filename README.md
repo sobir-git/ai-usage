@@ -14,7 +14,43 @@ ai-usage
 When attached to a terminal, this opens the interactive view:
 
 - `r` refreshes all providers
+- Arrow keys or `j` / `k` scroll; Space pages down; `g` / `G` jump to top / bottom
 - `q` exits
+
+The dashboard puts Devin's daily quota first, uses bars showing **remaining**
+quota consistently, and shows each Codex profile separately. Colors turn amber
+at 25% remaining and red at 10%. Set `NO_COLOR=1` to disable colors.
+
+Results appear as each provider finishes. Refresh keeps the previous values on
+screen and marks pending providers; pressing `r` while a refresh is running is
+ignored. Quit stays responsive during network requests. The layout adapts to
+terminal size, scrolls when needed, and restores the previous terminal screen on
+exit. Reset countdowns update without making additional network requests. Under
+12 hours, resets show hours/minutes; later resets use local dates and times.
+
+Example dashboard (illustrative values):
+
+```text
+  AI USAGE  /  subscription quotas
+  Updated 1:51:11 PM  |  local time +05
+-------------------------------------------------------------------------------
+  DEVIN  /  Pro
+    Daily     [||||||||||..]  84.0% left   resets Sep 13, 1:00 PM
+    Weekly    [||||........]  35.0% left   resets Sep 13, 1:00 PM
+
+  CODEX  /  default  /  Pro
+    7d        [||||||||||||] 100.0% left   resets Sep 19, 1:10 PM
+
+  CODEX  /  codex-2  /  Plus
+    5h        [||||||||||||]  99.0% left   resets in 4h 54m
+    7d        [||||||||||||] 100.0% left   resets Sep 19, 1:45 PM
+
+  CLAUDE CODE  /  Max
+    5h        [||||||||||||] 100.0% left   reset unknown
+    7d        [|||||||||||.]  95.0% left   resets Sep 17, 1:00 PM
+-------------------------------------------------------------------------------
+  r refresh   j/k or arrows scroll   q quit
+```
 
 For scripts or a single snapshot:
 
@@ -29,6 +65,8 @@ ai-usage --strict
 Configured providers are fetched concurrently. A failed provider or Codex
 profile does not hide successful results. `--strict` returns failure when any
 configured provider/account cannot be read.
+HTTP 429 responses are reported immediately instead of retrying rapidly.
+`TERM=dumb`, redirected output, and `--once` use plain text.
 
 ## Providers
 
