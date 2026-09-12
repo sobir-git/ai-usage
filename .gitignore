@@ -1,0 +1,5 @@
+bin/ai-usage
+bin/
+*.test
+coverage.out
+.DS_Store
