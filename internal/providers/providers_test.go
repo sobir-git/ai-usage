@@ -12,6 +12,26 @@ import (
 	"time"
 )
 
+func TestDirectHTTPModeDoesNotAttemptAppServer(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) }))
+	defer server.Close()
+	// The untrusted local certificate intentionally makes the HTTP attempt fail.
+	t.Setenv("CODEX_CHATGPT_BASE_URL", server.URL)
+	t.Setenv("PATH", t.TempDir())
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"access_token":"fixture"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := fetchCodexProfile(WithoutCodexFallback(context.Background()), home, time.Second, 0)
+	if err == nil || strings.Contains(err.Error(), "fallback") {
+		t.Fatalf("direct mode: %v", err)
+	}
+	_, _, err = fetchCodexProfile(context.Background(), home, time.Second, 0)
+	if err == nil || !strings.Contains(err.Error(), "app-server fallback failed") {
+		t.Fatalf("default fallback changed: %v", err)
+	}
+}
+
 func TestFallbackDoesNotPromoteSparkToOverall(t *testing.T) {
 	window := func(used int) map[string]any {
 		return map[string]any{"primary": map[string]any{"usedPercent": used, "windowDurationMins": 300}}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,43 @@ func Available() bool {
 type update struct {
 	index  int
 	result app.ProviderResult
+}
+
+type inputEvent struct {
+	key   byte
+	click bool
+}
+
+const (
+	doubleClickWindow  = 500 * time.Millisecond
+	clickRefreshWindow = time.Minute
+	maxClickRefreshes  = 1
+)
+
+type clickRefreshLimiter struct {
+	lastClick time.Time
+	accepted  []time.Time
+}
+
+func (limiter *clickRefreshLimiter) allow(now time.Time) bool {
+	if !limiter.lastClick.IsZero() && now.Sub(limiter.lastClick) >= 0 && now.Sub(limiter.lastClick) <= doubleClickWindow {
+		limiter.lastClick = now
+		return false
+	}
+	limiter.lastClick = now
+	cutoff := now.Add(-clickRefreshWindow)
+	kept := limiter.accepted[:0]
+	for _, accepted := range limiter.accepted {
+		if accepted.After(cutoff) {
+			kept = append(kept, accepted)
+		}
+	}
+	limiter.accepted = kept
+	if len(limiter.accepted) >= maxClickRefreshes {
+		return false
+	}
+	limiter.accepted = append(limiter.accepted, now)
+	return true
 }
 
 // Run owns the screen; workers only send immutable provider results. Refresh
@@ -43,13 +81,15 @@ func Run(ctx context.Context, selected []app.ProviderSpec, timeout time.Duration
 		case <-time.After(500 * time.Millisecond):
 		}
 	}()
-	fmt.Print("\x1b[?1049h\x1b[?25l")
+	// Use SGR mouse reporting so clicks work through tmux and coordinates do not
+	// limit the dashboard size. Releases, rather than presses, trigger refresh.
+	fmt.Print("\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h")
 	defer func() {
-		fmt.Print("\x1b[0m\x1b[?25h\x1b[?1049l")
+		fmt.Print("\x1b[?1006l\x1b[?1000l\x1b[0m\x1b[?25h\x1b[?1049l")
 		_ = term.Restore(int(os.Stdin.Fd()), state)
 	}()
-	keys := make(chan byte, 16)
-	go readKeys(ctx, keys)
+	events := make(chan inputEvent, 16)
+	go readEvents(ctx, events)
 	updates := make(chan update, len(selected))
 	results := make([]app.ProviderResult, len(selected))
 	pending := make([]bool, len(selected))
@@ -76,6 +116,7 @@ func Run(ctx context.Context, selected []app.ProviderSpec, timeout time.Duration
 	start()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	var clickLimiter clickRefreshLimiter
 	offset := 0
 	previousFrame := ""
 	for {
@@ -94,14 +135,20 @@ func Run(ctx context.Context, selected []app.ProviderSpec, timeout time.Duration
 		select {
 		case <-ctx.Done():
 			return 0
-		case key, ok := <-keys:
-			if !ok || key == 'q' || key == 3 || key == 4 {
+		case event, ok := <-events:
+			if !ok || event.key == 'q' || event.key == 3 || event.key == 4 {
 				if remaining > 0 {
 					return 0
 				}
 				return app.ExitCode(results, strict)
 			}
-			switch key {
+			if event.click {
+				if remaining == 0 && clickLimiter.allow(time.Now()) {
+					start()
+				}
+				continue
+			}
+			switch event.key {
 			case 'r':
 				if remaining == 0 {
 					start()
@@ -129,20 +176,85 @@ func Run(ctx context.Context, selected []app.ProviderSpec, timeout time.Duration
 	}
 }
 
-func readKeys(ctx context.Context, keys chan<- byte) {
-	defer close(keys)
+func readEvents(ctx context.Context, events chan<- inputEvent) {
+	defer close(events)
+	var parser inputParser
 	buffer := make([]byte, 32)
 	for {
 		n, err := os.Stdin.Read(buffer)
 		if err != nil || n == 0 {
 			return
 		}
-		for _, key := range buffer[:n] {
+		for _, event := range parser.feed(buffer[:n]) {
 			select {
-			case keys <- key:
+			case events <- event:
 			case <-ctx.Done():
 				return
 			}
 		}
 	}
+}
+
+// inputParser separates keyboard input from terminal control sequences. This
+// prevents bytes inside mouse reports from accidentally acting as hotkeys.
+type inputParser struct {
+	state    byte
+	mouseBuf []byte
+}
+
+func (parser *inputParser) feed(data []byte) []inputEvent {
+	var events []inputEvent
+	for _, value := range data {
+		switch parser.state {
+		case 0:
+			if value == '\x1b' {
+				parser.state = 1
+			} else {
+				events = append(events, inputEvent{key: value})
+			}
+		case 1:
+			if value == '[' {
+				parser.state = 2
+			} else {
+				parser.state = 0
+			}
+		case 2:
+			if value == '<' {
+				parser.state = 3
+				parser.mouseBuf = parser.mouseBuf[:0]
+			} else if value >= 0x40 && value <= 0x7e {
+				parser.state = 0
+				if strings.ContainsRune("ABCD", rune(value)) {
+					events = append(events, inputEvent{key: value})
+				}
+			}
+		case 3:
+			if value == 'M' || value == 'm' {
+				if value == 'm' && primaryMouseButton(parser.mouseBuf) {
+					events = append(events, inputEvent{click: true})
+				}
+				parser.state = 0
+				parser.mouseBuf = parser.mouseBuf[:0]
+			} else if len(parser.mouseBuf) < 64 {
+				parser.mouseBuf = append(parser.mouseBuf, value)
+			} else {
+				parser.state = 0
+				parser.mouseBuf = parser.mouseBuf[:0]
+			}
+		}
+	}
+	return events
+}
+
+func primaryMouseButton(report []byte) bool {
+	buttonText, _, ok := strings.Cut(string(report), ";")
+	if !ok {
+		return false
+	}
+	button, err := strconv.Atoi(buttonText)
+	if err != nil {
+		return false
+	}
+	// Bits 2-4 are modifiers. Reject motion, wheel, and non-primary buttons.
+	return button&3 == 0 && button&(32|64|128) == 0
 }

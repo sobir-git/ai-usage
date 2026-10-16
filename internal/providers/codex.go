@@ -20,6 +20,13 @@ const (
 	defaultCodexBaseURL = "https://chatgpt.com/backend-api"
 )
 
+type noCodexFallbackKey struct{}
+
+// WithoutCodexFallback keeps embedding callers on the direct HTTP path.
+func WithoutCodexFallback(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noCodexFallbackKey{}, true)
+}
+
 type CodexCredentials struct {
 	AccessToken string
 	AccountID   string
@@ -187,6 +194,9 @@ func fetchCodexProfile(ctx context.Context, codexHome string, timeout time.Durat
 	}
 	body, requestErr := requestJSON(ctx, "GET", endpoint, "Codex", headers, nil, timeout, retries)
 	if requestErr != nil {
+		if disabled, _ := ctx.Value(noCodexFallbackKey{}).(bool); disabled {
+			return nil, "", requestErr
+		}
 		if ctx.Err() != nil {
 			return nil, "", ctx.Err()
 		}

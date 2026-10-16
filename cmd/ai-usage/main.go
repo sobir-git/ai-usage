@@ -51,6 +51,7 @@ func run(arguments []string) int {
 	once := flagSet.Bool("once", false, "print one snapshot instead of opening the TUI")
 	showMissing := flagSet.Bool("show-missing", false, "show providers without local credentials")
 	strict := flagSet.Bool("strict", false, "return failure when any configured account cannot be read")
+	noFallback := flagSet.Bool("no-codex-fallback", false, "use direct HTTP only; do not start a Codex app-server")
 	timeoutSeconds := flagSet.Float64("timeout", 8, "per-attempt network timeout in seconds")
 	retries := flagSet.Int("retries", 2, "transient-failure retries")
 	showVersion := flagSet.Bool("version", false, "print the version")
@@ -84,6 +85,9 @@ func run(arguments []string) int {
 	timeout := time.Duration(*timeoutSeconds * float64(time.Second))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if *noFallback {
+		ctx = providers.WithoutCodexFallback(ctx)
+	}
 
 	if !*jsonOutput && !*once && tui.Available() {
 		return tui.Run(ctx, selected, timeout, *retries, *showMissing, *strict)

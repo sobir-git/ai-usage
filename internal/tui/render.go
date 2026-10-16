@@ -85,7 +85,7 @@ func render(results []app.ProviderResult, pending []bool, showMissing bool, refr
 	if loading > 0 {
 		status = fmt.Sprintf("Refreshing %d provider(s)...", loading)
 	} else if !refreshed.IsZero() {
-		status = "Updated " + refreshed.Format("3:04:05 PM")
+		status = updatedLabel(refreshed, now)
 	}
 	zone, _ := now.Zone()
 	rows := []line{
@@ -98,7 +98,7 @@ func render(results []app.ProviderResult, pending []bool, showMissing bool, refr
 		rows = append(rows, line{})
 	}
 	rows = append(rows, line{strings.Repeat("-", width), muted})
-	footer := "  r refresh   j/k or arrows scroll   q quit"
+	footer := "  click or r refresh   j/k or arrows scroll   q quit"
 	if maxOffset > 0 {
 		footer += fmt.Sprintf("   %d-%d/%d", offset+1, min(len(body), offset+visible), len(body))
 	}
@@ -108,6 +108,32 @@ func render(results []app.ProviderResult, pending []bool, showMissing bool, refr
 		output[i] = paint(row, width, color)
 	}
 	return strings.Join(output, "\n"), offset
+}
+
+func updatedLabel(refreshed, now time.Time) string {
+	age := now.Sub(refreshed)
+	if age < time.Minute {
+		return "Updated just now"
+	}
+	if age < time.Hour {
+		minutes := int(age / time.Minute)
+		if minutes == 1 {
+			return "Updated 1 minute ago"
+		}
+		return fmt.Sprintf("Updated %d minutes ago", minutes)
+	}
+	if age < 24*time.Hour {
+		hours := int(age / time.Hour)
+		if hours == 1 {
+			return "Updated 1 hour ago"
+		}
+		return fmt.Sprintf("Updated %d hours ago", hours)
+	}
+	days := int(age / (24 * time.Hour))
+	if days == 1 {
+		return "Updated 1 day ago"
+	}
+	return fmt.Sprintf("Updated %d days ago", days)
 }
 
 func providerLines(result app.ProviderResult, busy bool, width int, now time.Time) []line {

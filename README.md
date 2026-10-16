@@ -14,6 +14,8 @@ ai-usage
 When attached to a terminal, this opens the interactive view:
 
 - `r` refreshes all providers
+- A click anywhere refreshes all providers; double-clicks count once, and mouse
+  refreshes are limited to one per rolling minute
 - Arrow keys or `j` / `k` scroll; Space pages down; `g` / `G` jump to top / bottom
 - `q` exits
 
@@ -23,7 +25,8 @@ at 25% remaining and red at 10%. Set `NO_COLOR=1` to disable colors.
 
 Results appear as each provider finishes. Refresh keeps the previous values on
 screen and marks pending providers; pressing `r` while a refresh is running is
-ignored. Quit stays responsive during network requests. The layout adapts to
+ignored. The status shows how long ago the data was updated. Quit stays
+responsive during network requests. The layout adapts to
 terminal size, scrolls when needed, and restores the previous terminal screen on
 exit. Reset countdowns update without making additional network requests. Under
 12 hours, resets show hours/minutes; later resets use local dates and times.
@@ -49,7 +52,7 @@ Example dashboard (illustrative values):
     5h        [||||||||||||] 100.0% left   reset unknown
     7d        [|||||||||||.]  95.0% left   resets Sep 17, 1:00 PM
 -------------------------------------------------------------------------------
-  r refresh   j/k or arrows scroll   q quit
+  click or r refresh   j/k or arrows scroll   q quit
 ```
 
 For scripts or a single snapshot:
@@ -60,6 +63,7 @@ ai-usage --json
 ai-usage --provider codex --provider claude
 ai-usage --show-missing
 ai-usage --strict
+ai-usage --json --no-codex-fallback
 ```
 
 Configured providers are fetched concurrently. A failed provider or Codex
@@ -87,6 +91,9 @@ Symlinked profiles and credential files are skipped.
 The normal path is one live request to Codex's usage service. If that fails,
 the app asks the local Codex app-server for rate limits. Human output shows the
 overall quota; model-specific windows remain available in `--json`.
+Embedding applications can pass `--no-codex-fallback` to use direct HTTP only
+and report a provider error instead of starting the app-server. System Manager
+uses this mode for its optional AI Usage section.
 
 Codex exposes rolling windows such as five hours and seven days, not a separate
 calendar-day quota.

@@ -68,3 +68,25 @@ func TestResetLabelUsesLocalTimeAndDoesNotInventReset(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestUpdatedLabelUsesRelativeAge(t *testing.T) {
+	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		age  time.Duration
+		want string
+	}{
+		{0, "Updated just now"},
+		{59 * time.Second, "Updated just now"},
+		{time.Minute, "Updated 1 minute ago"},
+		{42 * time.Minute, "Updated 42 minutes ago"},
+		{time.Hour, "Updated 1 hour ago"},
+		{5 * time.Hour, "Updated 5 hours ago"},
+		{24 * time.Hour, "Updated 1 day ago"},
+		{72 * time.Hour, "Updated 3 days ago"},
+	}
+	for _, test := range tests {
+		if got := updatedLabel(now.Add(-test.age), now); got != test.want {
+			t.Errorf("age %s: got %q want %q", test.age, got, test.want)
+		}
+	}
+}
